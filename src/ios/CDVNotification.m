@@ -43,10 +43,13 @@ static void soundCompletionCallback(SystemSoundID ssid, void* data);
     CDVAlertView* alertView = [[CDVAlertView alloc]
         initWithTitle:title
                   message:message
-                 delegate:self
+                 delegate:nil
         cancelButtonTitle:nil
         otherButtonTitles:nil];
 
+    alertView.delegate = alertView;
+    alertView.commandDelegate = self.commandDelegate;
+    
     alertView.callbackId = callbackId;
 
     NSUInteger count = [buttons count];
@@ -95,30 +98,6 @@ static void soundCompletionCallback(SystemSoundID ssid, void* data);
     [self showDialogWithMessage:message title:title buttons:buttons defaultText:defaultText callbackId:callbackId dialogType:DIALOG_TYPE_PROMPT];
 }
 
-/**
-  * Callback invoked when an alert dialog's buttons are clicked.
-  */
-- (void)alertView:(UIAlertView*)alertView clickedButtonAtIndex:(NSInteger)buttonIndex
-{
-    CDVAlertView* cdvAlertView = (CDVAlertView*)alertView;
-    CDVPluginResult* result;
-
-    // Determine what gets returned to JS based on the alert view type.
-    if (alertView.alertViewStyle == UIAlertViewStyleDefault) {
-        // For alert and confirm, return button index as int back to JS.
-        result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsInt:(int)(buttonIndex + 1)];
-    } else {
-        // For prompt, return button index and input text back to JS.
-        NSString* value0 = [[alertView textFieldAtIndex:0] text];
-        NSDictionary* info = @{
-            @"buttonIndex":@(buttonIndex + 1),
-            @"input1":(value0 ? value0 : [NSNull null])
-        };
-        result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:info];
-    }
-    [self.commandDelegate sendPluginResult:result callbackId:cdvAlertView.callbackId];
-}
-
 static void playBeep(int count) {
     SystemSoundID completeSound;
     NSInteger cbDataCount = count;
@@ -152,6 +131,30 @@ static void soundCompletionCallback(SystemSoundID  ssid, void* data) {
 
 @implementation CDVAlertView
 
-@synthesize callbackId;
+@synthesize callbackId, commandDelegate;
+
+/**
+ * Callback invoked when an alert dialog's buttons are clicked.
+ */
+- (void)alertView:(UIAlertView*)alertView clickedButtonAtIndex:(NSInteger)buttonIndex
+{
+    CDVAlertView* cdvAlertView = (CDVAlertView*)alertView;
+    CDVPluginResult* result;
+    
+    // Determine what gets returned to JS based on the alert view type.
+    if (alertView.alertViewStyle == UIAlertViewStyleDefault) {
+        // For alert and confirm, return button index as int back to JS.
+        result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsInt:(int)(buttonIndex + 1)];
+    } else {
+        // For prompt, return button index and input text back to JS.
+        NSString* value0 = [[alertView textFieldAtIndex:0] text];
+        NSDictionary* info = @{
+                               @"buttonIndex":@(buttonIndex + 1),
+                               @"input1":(value0 ? value0 : [NSNull null])
+                               };
+        result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:info];
+    }
+    [self.commandDelegate sendPluginResult:result callbackId:cdvAlertView.callbackId];
+}
 
 @end
