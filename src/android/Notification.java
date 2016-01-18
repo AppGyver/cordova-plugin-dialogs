@@ -26,8 +26,6 @@ import org.apache.cordova.PluginResult;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
-
-import android.annotation.SuppressLint;
 import android.app.AlertDialog;
 import android.app.AlertDialog.Builder;
 import android.app.ProgressDialog;
@@ -36,21 +34,59 @@ import android.media.Ringtone;
 import android.media.RingtoneManager;
 import android.net.Uri;
 import android.widget.EditText;
-import android.widget.TextView;
 
+import java.lang.ref.WeakReference;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * This class provides access to notifications on the device.
- *
- * Be aware that this implementation gets called on 
- * navigator.notification.{alert|confirm|prompt}, and that there is a separate
- * implementation in org.apache.cordova.CordovaChromeClient that gets
- * called on a simple window.{alert|confirm|prompt}.
  */
 public class Notification extends CordovaPlugin {
 
     private static final String LOG_TAG = "Notification";
     
+    private static WeakReference<Object[]> sLastAlertsCreated;
+    private static List<Runnable> sListeners = new ArrayList<Runnable>();
+
+    public static void addOnAlertDisplayedListener(Runnable listener) {
+        sListeners.add(listener);
+    }
+
+    public static AlertDialog getLastAlertDisplayed() {
+        if (sLastAlertsCreated != null) {
+            if (sLastAlertsCreated.get() == null) {
+                sLastAlertsCreated = null;
+                return null;
+            }
+            return (AlertDialog) sLastAlertsCreated.get()[0];
+        }
+        return null;
+    }
+
+    public static List<AlertDialog.OnClickListener> getLastAlertDisplayedButtonListeners() {
+        if (sLastAlertsCreated != null) {
+            if (sLastAlertsCreated.get() == null) {
+                sLastAlertsCreated = null;
+                return null;
+            }
+            return (List<AlertDialog.OnClickListener>) sLastAlertsCreated.get()[2];
+        }
+        return null;
+    }
+
+
+    public static String getLastAlertTitleDisplayed() {
+        if (sLastAlertsCreated != null) {
+            if (sLastAlertsCreated.get() == null) {
+                sLastAlertsCreated = null;
+                return null;
+            }
+            return (String) sLastAlertsCreated.get()[1];
+        }
+        return null;
+    }
+
     public int confirmResult = -1;
     public ProgressDialog spinnerDialog = null;
     public ProgressDialog progressDialog = null;
@@ -70,14 +106,6 @@ public class Notification extends CordovaPlugin {
      * @return                  True when the action was valid, false otherwise.
      */
     public boolean execute(String action, JSONArray args, CallbackContext callbackContext) throws JSONException {
-    	/*
-    	 * Don't run any of these if the current activity is finishing
-    	 * in order to avoid android.view.WindowManager$BadTokenException
-    	 * crashing the app. Just return true here since false should only
-    	 * be returned in the event of an invalid action.
-    	 */
-    	if(this.cordova.getActivity().isFinishing()) return true;
-    	
         if (action.equals("beep")) {
             this.beep(args.getLong(0));
         }
@@ -126,29 +154,24 @@ public class Notification extends CordovaPlugin {
      *
      * @param count     Number of times to play notification
      */
-    public void beep(final long count) {
-        cordova.getThreadPool().execute(new Runnable() {
-            public void run() {
-                Uri ringtone = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
-                Ringtone notification = RingtoneManager.getRingtone(cordova.getActivity().getBaseContext(), ringtone);
+    public void beep(long count) {
+        Uri ringtone = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
+        Ringtone notification = RingtoneManager.getRingtone(this.cordova.getActivity().getBaseContext(), ringtone);
 
-                // If phone is not set to silent mode
-                if (notification != null) {
-                    for (long i = 0; i < count; ++i) {
-                        notification.play();
-                        long timeout = 5000;
-                        while (notification.isPlaying() && (timeout > 0)) {
-                            timeout = timeout - 100;
-                            try {
-                                Thread.sleep(100);
-                            } catch (InterruptedException e) {
-                                Thread.currentThread().interrupt();
-                            }
-                        }
+        // If phone is not set to silent mode
+        if (notification != null) {
+            for (long i = 0; i < count; ++i) {
+                notification.play();
+                long timeout = 5000;
+                while (notification.isPlaying() && (timeout > 0)) {
+                    timeout = timeout - 100;
+                    try {
+                        Thread.sleep(100);
+                    } catch (InterruptedException e) {
                     }
                 }
             }
-        });
+        }
     }
 
     /**
@@ -159,34 +182,60 @@ public class Notification extends CordovaPlugin {
      * @param callbackContext   The callback context
      */
     public synchronized void alert(final String message, final String title, final String buttonLabel, final CallbackContext callbackContext) {
-    	final CordovaInterface cordova = this.cordova;
+
+        final CordovaInterface cordova = this.cordova;
 
         Runnable runnable = new Runnable() {
             public void run() {
 
-                AlertDialog.Builder dlg = createDialog(cordova); // new AlertDialog.Builder(cordova.getActivity(), AlertDialog.THEME_DEVICE_DEFAULT_LIGHT);
+                AlertDialog.Builder dlg = new AlertDialog.Builder(cordova.getActivity());
                 dlg.setMessage(message);
                 dlg.setTitle(title);
                 dlg.setCancelable(true);
-                dlg.setPositiveButton(buttonLabel,
-                        new AlertDialog.OnClickListener() {
-                            public void onClick(DialogInterface dialog, int which) {
-                                dialog.dismiss();
-                                callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.OK, 0));
-                            }
-                        });
-                dlg.setOnCancelListener(new AlertDialog.OnCancelListener() {
-                    public void onCancel(DialogInterface dialog)
-                    {
-                        dialog.dismiss();
-                        callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.OK, 0));
-                    }
-                });
 
-                changeTextDirection(dlg);
-            };
+                AlertDialog.OnClickListener positiveOnClickListener
+                        = new AlertDialog.OnClickListener() {
+                    public void onClick(DialogInterface dialog, int which) {
+                        dialog.dismiss();
+                        callbackContext
+                                .sendPluginResult(new PluginResult(PluginResult.Status.OK, 0));
+                    }
+                };
+
+                dlg.setPositiveButton(buttonLabel, positiveOnClickListener);
+
+                AlertDialog.OnCancelListener onCancelListener = new AlertDialog.OnCancelListener() {
+                    public void onCancel(DialogInterface dialog) {
+                        dialog.dismiss();
+                        callbackContext
+                                .sendPluginResult(new PluginResult(PluginResult.Status.OK, 0));
+                    }
+                };
+
+                dlg.setOnCancelListener(onCancelListener);
+
+                dlg.create();
+
+                List<AlertDialog.OnClickListener> buttonListeners
+                        = new ArrayList<DialogInterface.OnClickListener>();
+                buttonListeners.add(positiveOnClickListener);
+
+                notifyAlertDisplayed(dlg.show(), title, buttonListeners);
+            }
+
+            ;
         };
         this.cordova.getActivity().runOnUiThread(runnable);
+    }
+
+    private void notifyAlertDisplayed(AlertDialog alert, String title,
+            List<AlertDialog.OnClickListener> buttonListeners) {
+        sLastAlertsCreated = new WeakReference<Object[]>(
+                new Object[]{alert, title, buttonListeners});
+
+        for (Runnable rn : sListeners) {
+            rn.run();
+        }
     }
 
     /**
@@ -200,25 +249,35 @@ public class Notification extends CordovaPlugin {
      * @param callbackContext   The callback context.
      */
     public synchronized void confirm(final String message, final String title, final JSONArray buttonLabels, final CallbackContext callbackContext) {
-    	final CordovaInterface cordova = this.cordova;
+
+        final CordovaInterface cordova = this.cordova;
 
         Runnable runnable = new Runnable() {
             public void run() {
-                AlertDialog.Builder dlg = createDialog(cordova); // new AlertDialog.Builder(cordova.getActivity(), AlertDialog.THEME_DEVICE_DEFAULT_LIGHT);
+                AlertDialog.Builder dlg = new AlertDialog.Builder(cordova.getActivity());
                 dlg.setMessage(message);
                 dlg.setTitle(title);
                 dlg.setCancelable(true);
 
+                List<AlertDialog.OnClickListener> buttonListeners
+                        = new ArrayList<DialogInterface.OnClickListener>();
+
                 // First button
                 if (buttonLabels.length() > 0) {
                     try {
-                        dlg.setNegativeButton(buttonLabels.getString(0),
-                            new AlertDialog.OnClickListener() {
-                                public void onClick(DialogInterface dialog, int which) {
-                                    dialog.dismiss();
-                                    callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.OK, 1));
-                                }
-                            });
+
+                        AlertDialog.OnClickListener onClickListener
+                                = new AlertDialog.OnClickListener() {
+                            public void onClick(DialogInterface dialog, int which) {
+                                dialog.dismiss();
+                                callbackContext.sendPluginResult(
+                                        new PluginResult(PluginResult.Status.OK, 1));
+                            }
+                        };
+
+                        buttonListeners.add(onClickListener);
+
+                        dlg.setNegativeButton(buttonLabels.getString(0), onClickListener);
                     } catch (JSONException e) {
                         LOG.d(LOG_TAG,"JSONException on first button.");
                     }
@@ -227,13 +286,18 @@ public class Notification extends CordovaPlugin {
                 // Second button
                 if (buttonLabels.length() > 1) {
                     try {
-                        dlg.setNeutralButton(buttonLabels.getString(1),
-                            new AlertDialog.OnClickListener() {
-                                public void onClick(DialogInterface dialog, int which) {
-                                    dialog.dismiss();
-                                    callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.OK, 2));
-                                }
-                            });
+                        AlertDialog.OnClickListener onClickListener
+                                = new AlertDialog.OnClickListener() {
+                            public void onClick(DialogInterface dialog, int which) {
+                                dialog.dismiss();
+                                callbackContext.sendPluginResult(
+                                        new PluginResult(PluginResult.Status.OK, 2));
+                            }
+                        };
+
+                        buttonListeners.add(onClickListener);
+
+                        dlg.setNeutralButton(buttonLabels.getString(1), onClickListener);
                     } catch (JSONException e) {
                         LOG.d(LOG_TAG,"JSONException on second button.");
                     }
@@ -242,27 +306,35 @@ public class Notification extends CordovaPlugin {
                 // Third button
                 if (buttonLabels.length() > 2) {
                     try {
-                        dlg.setPositiveButton(buttonLabels.getString(2),
-                            new AlertDialog.OnClickListener() {
-                                public void onClick(DialogInterface dialog, int which) {
-                                  dialog.dismiss();
-                                  callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.OK, 3));
-                                }
-                            });
+                        AlertDialog.OnClickListener onClickListener
+                                = new AlertDialog.OnClickListener() {
+                            public void onClick(DialogInterface dialog, int which) {
+                                dialog.dismiss();
+                                callbackContext.sendPluginResult(
+                                        new PluginResult(PluginResult.Status.OK, 3));
+                            }
+                        };
+                        buttonListeners.add(onClickListener);
+
+                        dlg.setPositiveButton(buttonLabels.getString(2), onClickListener);
                     } catch (JSONException e) {
                         LOG.d(LOG_TAG,"JSONException on third button.");
                     }
                 }
+
                 dlg.setOnCancelListener(new AlertDialog.OnCancelListener() {
-                    public void onCancel(DialogInterface dialog)
-                    {
+                    public void onCancel(DialogInterface dialog) {
                         dialog.dismiss();
-                        callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.OK, 0));
+                        callbackContext
+                                .sendPluginResult(new PluginResult(PluginResult.Status.OK, 0));
                     }
                 });
 
-                changeTextDirection(dlg);
-            };
+                dlg.create();
+                notifyAlertDisplayed(dlg.show(), title, buttonListeners);
+            }
+
+            ;
         };
         this.cordova.getActivity().runOnUiThread(runnable);
     }
@@ -280,38 +352,49 @@ public class Notification extends CordovaPlugin {
      * @param callbackContext   The callback context.
      */
     public synchronized void prompt(final String message, final String title, final JSONArray buttonLabels, final String defaultText, final CallbackContext callbackContext) {
-  	
+
         final CordovaInterface cordova = this.cordova;
-       
+        final EditText promptInput =  new EditText(cordova.getActivity());
+        promptInput.setHint(defaultText);
+
         Runnable runnable = new Runnable() {
             public void run() {
-                final EditText promptInput =  new EditText(cordova.getActivity());
-                promptInput.setHint(defaultText);
-                AlertDialog.Builder dlg = createDialog(cordova); // new AlertDialog.Builder(cordova.getActivity(), AlertDialog.THEME_DEVICE_DEFAULT_LIGHT);
+                AlertDialog.Builder dlg = new AlertDialog.Builder(cordova.getActivity());
                 dlg.setMessage(message);
                 dlg.setTitle(title);
                 dlg.setCancelable(true);
-                
+
                 dlg.setView(promptInput);
-                
+
                 final JSONObject result = new JSONObject();
-                
+
+                List<AlertDialog.OnClickListener> buttonListeners
+                        = new ArrayList<DialogInterface.OnClickListener>();
+
                 // First button
                 if (buttonLabels.length() > 0) {
                     try {
-                        dlg.setNegativeButton(buttonLabels.getString(0),
-                            new AlertDialog.OnClickListener() {
-                                public void onClick(DialogInterface dialog, int which) {
-                                    dialog.dismiss();
-                                    try {
-                                        result.put("buttonIndex",1);
-                                        result.put("input1", promptInput.getText().toString().trim().length()==0 ? defaultText : promptInput.getText());											
-                                    } catch (JSONException e) {
-                                        LOG.d(LOG_TAG,"JSONException on first button.", e);
-                                    }
-                                    callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.OK, result));
+                        AlertDialog.OnClickListener onClickListener
+                                = new AlertDialog.OnClickListener() {
+                            public void onClick(DialogInterface dialog, int which) {
+                                dialog.dismiss();
+                                try {
+                                    result.put("buttonIndex", 1);
+                                    result.put("input1",
+                                            promptInput.getText().toString().trim().length() == 0
+                                                    ? defaultText : promptInput.getText());
+                                } catch (JSONException e) {
+                                    e.printStackTrace();
                                 }
-                            });
+                                callbackContext.sendPluginResult(
+                                        new PluginResult(PluginResult.Status.OK, result));
+                            }
+                        };
+
+                        buttonListeners.add(onClickListener);
+
+                        dlg.setNegativeButton(buttonLabels.getString(0),
+                                onClickListener);
                     } catch (JSONException e) {
                         LOG.d(LOG_TAG,"JSONException on first button.");
                     }
@@ -320,19 +403,27 @@ public class Notification extends CordovaPlugin {
                 // Second button
                 if (buttonLabels.length() > 1) {
                     try {
-                        dlg.setNeutralButton(buttonLabels.getString(1),
-                            new AlertDialog.OnClickListener() {
-                                public void onClick(DialogInterface dialog, int which) {
-                                    dialog.dismiss();
-                                    try {
-                                        result.put("buttonIndex",2);
-                                        result.put("input1", promptInput.getText().toString().trim().length()==0 ? defaultText : promptInput.getText());
-                                    } catch (JSONException e) {
-                                        LOG.d(LOG_TAG,"JSONException on second button.", e);
-                                    }
-                                    callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.OK, result));
+                        AlertDialog.OnClickListener onClickListener
+                                = new AlertDialog.OnClickListener() {
+                            public void onClick(DialogInterface dialog, int which) {
+                                dialog.dismiss();
+                                try {
+                                    result.put("buttonIndex", 2);
+                                    result.put("input1",
+                                            promptInput.getText().toString().trim().length() == 0
+                                                    ? defaultText : promptInput.getText());
+                                } catch (JSONException e) {
+                                    e.printStackTrace();
                                 }
-                            });
+                                callbackContext.sendPluginResult(
+                                        new PluginResult(PluginResult.Status.OK, result));
+                            }
+                        };
+
+                        buttonListeners.add(onClickListener);
+
+                        dlg.setNeutralButton(buttonLabels.getString(1),
+                                onClickListener);
                     } catch (JSONException e) {
                         LOG.d(LOG_TAG,"JSONException on second button.");
                     }
@@ -341,36 +432,53 @@ public class Notification extends CordovaPlugin {
                 // Third button
                 if (buttonLabels.length() > 2) {
                     try {
-                        dlg.setPositiveButton(buttonLabels.getString(2),
-                            new AlertDialog.OnClickListener() {
-                                public void onClick(DialogInterface dialog, int which) {
-                                    dialog.dismiss();
-                                    try {
-                                        result.put("buttonIndex",3);
-                                        result.put("input1", promptInput.getText().toString().trim().length()==0 ? defaultText : promptInput.getText());
-                                    } catch (JSONException e) { 
-                                        LOG.d(LOG_TAG,"JSONException on third button.", e);
-                                    }
-                                    callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.OK, result));
+                        AlertDialog.OnClickListener onClickListener
+                                = new AlertDialog.OnClickListener() {
+                            public void onClick(DialogInterface dialog, int which) {
+                                dialog.dismiss();
+                                try {
+                                    result.put("buttonIndex", 3);
+                                    result.put("input1",
+                                            promptInput.getText().toString().trim().length() == 0
+                                                    ? defaultText : promptInput.getText());
+                                } catch (JSONException e) {
+                                    e.printStackTrace();
                                 }
-                            });
+                                callbackContext.sendPluginResult(
+                                        new PluginResult(PluginResult.Status.OK, result));
+                            }
+                        };
+
+                        buttonListeners.add(onClickListener);
+
+                        dlg.setPositiveButton(buttonLabels.getString(2),
+                                onClickListener);
                     } catch (JSONException e) {
                         LOG.d(LOG_TAG,"JSONException on third button.");
                     }
                 }
                 dlg.setOnCancelListener(new AlertDialog.OnCancelListener() {
-                    public void onCancel(DialogInterface dialog){
+                    public void onCancel(DialogInterface dialog) {
                         dialog.dismiss();
                         try {
-                            result.put("buttonIndex",0);
-                            result.put("input1", promptInput.getText().toString().trim().length()==0 ? defaultText : promptInput.getText());
-                        } catch (JSONException e) { e.printStackTrace(); }
-                        callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.OK, result));
+                            result.put("buttonIndex", 0);
+                            result.put("input1",
+                                    promptInput.getText().toString().trim().length() == 0
+                                            ? defaultText : promptInput.getText());
+                        } catch (JSONException e) {
+                            e.printStackTrace();
+                        }
+                        callbackContext
+                                .sendPluginResult(new PluginResult(PluginResult.Status.OK, result));
                     }
                 });
 
-                changeTextDirection(dlg);
-            };
+                dlg.create();
+                notifyAlertDisplayed(dlg.show(), title, buttonListeners);
+
+            }
+
+            ;
         };
         this.cordova.getActivity().runOnUiThread(runnable);
     }
@@ -386,22 +494,15 @@ public class Notification extends CordovaPlugin {
             this.spinnerDialog.dismiss();
             this.spinnerDialog = null;
         }
-        final Notification notification = this;
         final CordovaInterface cordova = this.cordova;
         Runnable runnable = new Runnable() {
             public void run() {
-                notification.spinnerDialog = createProgressDialog(cordova); // new ProgressDialog(cordova.getActivity(), AlertDialog.THEME_DEVICE_DEFAULT_LIGHT);
-                notification.spinnerDialog.setTitle(title);
-                notification.spinnerDialog.setMessage(message);
-                notification.spinnerDialog.setCancelable(true);
-                notification.spinnerDialog.setIndeterminate(true);
-                notification.spinnerDialog.setOnCancelListener(
+                Notification.this.spinnerDialog = ProgressDialog.show(cordova.getActivity(), title, message, true, true,
                         new DialogInterface.OnCancelListener() {
                             public void onCancel(DialogInterface dialog) {
-                                notification.spinnerDialog = null;
+                                Notification.this.spinnerDialog = null;
                             }
                         });
-                notification.spinnerDialog.show();
             }
         };
         this.cordova.getActivity().runOnUiThread(runnable);
@@ -432,7 +533,7 @@ public class Notification extends CordovaPlugin {
         final CordovaInterface cordova = this.cordova;
         Runnable runnable = new Runnable() {
             public void run() {
-                notification.progressDialog = createProgressDialog(cordova); // new ProgressDialog(cordova.getActivity(), AlertDialog.THEME_DEVICE_DEFAULT_LIGHT);
+                notification.progressDialog = new ProgressDialog(cordova.getActivity());
                 notification.progressDialog.setProgressStyle(ProgressDialog.STYLE_HORIZONTAL);
                 notification.progressDialog.setTitle(title);
                 notification.progressDialog.setMessage(message);
@@ -471,35 +572,6 @@ public class Notification extends CordovaPlugin {
             this.progressDialog = null;
         }
     }
-    
-    @SuppressLint("NewApi")
-    private AlertDialog.Builder createDialog(CordovaInterface cordova) {
-        int currentapiVersion = android.os.Build.VERSION.SDK_INT;
-        if (currentapiVersion >= android.os.Build.VERSION_CODES.HONEYCOMB) {
-            return new AlertDialog.Builder(cordova.getActivity(), AlertDialog.THEME_DEVICE_DEFAULT_LIGHT);
-        } else {
-            return new AlertDialog.Builder(cordova.getActivity());
-        }
-    }
 
-    @SuppressLint("InlinedApi")
-    private ProgressDialog createProgressDialog(CordovaInterface cordova) {
-        int currentapiVersion = android.os.Build.VERSION.SDK_INT;
-        if (currentapiVersion >= android.os.Build.VERSION_CODES.ICE_CREAM_SANDWICH) {
-            return new ProgressDialog(cordova.getActivity(), AlertDialog.THEME_DEVICE_DEFAULT_LIGHT);
-        } else {
-            return new ProgressDialog(cordova.getActivity());
-        }
-    }
-    
-    @SuppressLint("NewApi")
-    private void changeTextDirection(Builder dlg){
-        int currentapiVersion = android.os.Build.VERSION.SDK_INT;
-        dlg.create();
-        AlertDialog dialog =  dlg.show();
-        if (currentapiVersion >= android.os.Build.VERSION_CODES.JELLY_BEAN_MR1) {
-            TextView messageview = (TextView)dialog.findViewById(android.R.id.message);
-            messageview.setTextDirection(android.view.View.TEXT_DIRECTION_LOCALE);
-        }
-    }
+
 }
